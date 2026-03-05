@@ -62,6 +62,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
 import androidx.core.graphics.drawable.toBitmap
+import com.android.systemui.statusbar.VibratorHelper;
 import com.android.systemui.statusbar.notification.headsup.HeadsUpManager
 import com.android.systemui.statusbar.policy.KeyguardStateController
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -79,7 +80,7 @@ fun OngoingActionProgress(
     modifier: Modifier = Modifier
 ) {
     val state by controller.state.collectAsState()
-    
+
     val accentColor = MaterialTheme.colorScheme.primary
 
     AnimatedVisibility(
@@ -120,7 +121,6 @@ fun OngoingActionProgress(
                 Box(
                     modifier = Modifier
                         .size(26.dp)
-                        .alpha(state.opacity)
                         .then(gestureModifier),
                     contentAlignment = Alignment.Center
                 ) {
@@ -168,7 +168,6 @@ fun OngoingActionProgress(
                         .width(86.dp)
                         .height(26.dp)
                         .padding(horizontal = 6.dp, vertical = 4.dp)
-                        .alpha(state.opacity)
                         .then(gestureModifier),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -182,10 +181,10 @@ fun OngoingActionProgress(
                                 .padding(start = 1.dp),
                             colorFilter = null 
                         )
-                        
+
                         Spacer(modifier = Modifier.width(5.dp))
                     }
-                    
+
                     Box(
                         modifier = Modifier
                             .weight(1f)
@@ -269,7 +268,6 @@ data class ProgressState(
     val packageName: String? = null,
     val isIconAdaptive: Boolean = false,
     val isCompactMode: Boolean = false,
-    val opacity: Float = 1f,
     val showMediaControls: Boolean = false
 )
 
@@ -281,64 +279,48 @@ class OnGoingActionProgressComposeController(
     context: Context,
     notificationListener: NotificationListener,
     keyguardStateController: KeyguardStateController,
-    headsUpManager: HeadsUpManager
+    headsUpManager: HeadsUpManager,
+    vibrator: VibratorHelper
 ) {
     private val _state = MutableStateFlow(ProgressState())
     val state: StateFlow<ProgressState> = _state
 
-    /** Cache icon bitmap keyed by (packageName, isCompact) to avoid toBitmap() on every progress tick. */
-    private var cachedIconKey: Pair<String?, Boolean>? = null
-    private var cachedIconBitmap: androidx.compose.ui.graphics.ImageBitmap? = null
-    
     private val javaController: OnGoingActionProgressController
-    
+
     init {
         Log.d(TAG, "Initializing OnGoingActionProgressComposeController")
-        
-        val dummyGroup = OnGoingActionProgressGroup(null, null, null, null, null, null)
-        
+
         try {
             javaController = OnGoingActionProgressController(
                 context,
-                dummyGroup,
                 notificationListener,
                 keyguardStateController,
-                headsUpManager
+                headsUpManager,
+                vibrator
             )
-            
-            javaController.setStateCallback { isVisible, progress, maxProgress, icon, isAdaptive, packageName, isCompact, opacity, showMenu ->
-                val iconKey = Pair(packageName, isCompact)
-                val iconBitmap = if (icon == null) {
-                    cachedIconKey = null
-                    cachedIconBitmap = null
-                    null
+
+            javaController.setStateCallback { isVisible, progress, maxProgress, icon, isAdaptive, packageName, isCompact, showMenu ->
+                Log.d(TAG, "State callback: isVisible=$isVisible, compact=$isCompact, showMenu=$showMenu")
+
+                val iconSizePx = if (isCompact) {
+                    (14 * context.resources.displayMetrics.density).toInt() * 2 
                 } else {
-                    if (cachedIconKey == iconKey && cachedIconBitmap != null) {
-                        cachedIconBitmap
-                    } else {
-                        val iconSizePx = if (isCompact) {
-                            (14 * context.resources.displayMetrics.density).toInt() * 2
-                        } else {
-                            (16 * context.resources.displayMetrics.density).toInt() * 2
-                        }
-                        try {
-                            icon.toBitmap(
-                                width = iconSizePx,
-                                height = iconSizePx,
-                                config = Bitmap.Config.ARGB_8888
-                            ).asImageBitmap().also {
-                                cachedIconKey = iconKey
-                                cachedIconBitmap = it
-                            }
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Failed to convert icon to bitmap", e)
-                            cachedIconKey = null
-                            cachedIconBitmap = null
-                            null
-                        }
-                    }
+                    (16 * context.resources.displayMetrics.density).toInt() * 2 
                 }
-                
+
+                val iconBitmap = try {
+                    icon?.let { drawable ->
+                        drawable.toBitmap(
+                            width = iconSizePx,
+                            height = iconSizePx,
+                            config = Bitmap.Config.ARGB_8888
+                        ).asImageBitmap()
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to convert icon to bitmap", e)
+                    null
+                }
+
                 _state.value = ProgressState(
                     isVisible = isVisible,
                     progress = progress,
@@ -347,18 +329,17 @@ class OnGoingActionProgressComposeController(
                     packageName = packageName,
                     isIconAdaptive = isAdaptive,
                     isCompactMode = isCompact,
-                    opacity = opacity,
                     showMediaControls = showMenu
                 )
             }
-            
+
             Log.d(TAG, "OnGoingActionProgressComposeController initialized successfully")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to initialize OnGoingActionProgressController", e)
             throw e
         }
     }
-    
+
     fun destroy() {
         javaController.destroy()
     }
